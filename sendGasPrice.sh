@@ -37,8 +37,8 @@ if [ -z "$latest_entry" ]; then
   exit 1
 fi
 
-# Extract the city name and gas price
-gas_price=$(echo "$latest_entry" | awk -F',' '{print $2}')
+# Extract the gas price (3rd column)
+gas_price=$(echo "$latest_entry" | awk -F',' '{print $3}')
 
-# Send the notification
-curl -d "${city_name} gas price is ${gas_price}" "$ntfy_address"
+# Send the notification with a dollar sign
+curl -d "${city_name} gas price is \$${gas_price}" "$ntfy_address"
