@@ -53,33 +53,50 @@ TIMESTAMP=$(date '+%Y%m%d,%H%M')
 # Function to send request and extract gas prices
 send_request() {
   local store_id=$1
-  response=$(curl -s -G \
-    --url "https://www.costco.com/AjaxWarehouseBrowseLookupView" \
-    --data-urlencode "hasGas=true" \
-    --data-urlencode "populateWarehouseDetails=true" \
-    --data-urlencode "warehouseNumber=${store_id}" \
-    -H "User-Agent: Gastrak/1.0" \
-    -H "Accept-Language: en-US,en;q=0.5" \
-    -H "Accept: */*")
+  local retries=5
 
-  # Parse the JSON response
-  json_body=$(echo "$response" | jq '.')
+  while [ $retries -gt 0 ]; do
+    response=$(curl -s -G \
+      --url "https://www.costco.com/AjaxWarehouseBrowseLookupView" \
+      --data-urlencode "hasGas=true" \
+      --data-urlencode "populateWarehouseDetails=true" \
+      --data-urlencode "warehouseNumber=${store_id}" \
+      -H "User-Agent: Gastrak/1.0" \
+      -H "Accept-Language: en-US,en;q=0.5" \
+      -H "Accept: */*")
 
-  # Check for errors in the response
-  if [[ $? -ne 0 ]]; then
-    echo "Failed to parse response as JSON for store ID ${store_id}"
-    return
+    # Parse the JSON response
+    json_body=$(echo "$response" | jq '.')
+
+    # Check for errors in the response
+    if [[ $? -ne 0 ]]; then
+      echo "Failed to parse response as JSON for store ID ${store_id}"
+      return
+    fi
+
+    # Extract the relevant data, skipping the first element
+    gas_data=$(echo "$json_body" | jq '.[1:]')
+
+    # Extract and display the gasPrices data
+    gas_prices=$(echo "$gas_data" | jq '.[].gasPrices.regular | tonumber')
+
+    # Check if the gas price is null or zero
+    if [ -n "$gas_prices" ] && [ "$gas_prices" != "0" ]; then
+      gas_address=$(echo "$gas_data" | jq '.[].address1')
+      gas_city=$(echo "$gas_data" | jq '.[].city')
+      formatted_price=$(printf "%.2f" "$gas_prices")
+      echo "$TIMESTAMP,$formatted_price,$gas_address,$gas_city" >> "$output_file"
+      break
+    else
+      echo "Received null or zero gas price for store ID ${store_id}. Retrying..."
+      retries=$((retries - 1))
+      sleep 1
+    fi
+  done
+
+  if [ $retries -le 0 ]; then
+    echo "Failed to get a valid gas price for store ID ${store_id} after multiple attempts."
   fi
-
-  # Extract the relevant data, skipping the first element
-  gas_data=$(echo "$json_body" | jq '.[1:]')
-
-  # Extract and display the gasPrices data
-  gas_prices=$(echo "$gas_data" | jq '.[].gasPrices.regular | tonumber')
-  gas_address=$(echo "$gas_data" | jq '.[].address1')
-  gas_city=$(echo "$gas_data" | jq '.[].city')
-  formatted_price=$(printf "%.2f" "$gas_prices")
-  echo "$TIMESTAMP,$formatted_price,$gas_address,$gas_city" >> "$output_file"
 }
 
 # Process all store IDs if provided
@@ -118,6 +135,20 @@ if [ "$all_flag" = true ]; then
 
   # Extract and display the gasPrices data with formatted regular price
   gas_prices=$(echo "$gas_data" | jq -r '.[].gasPrices.regular | tonumber')
-  formatted_price=$(printf "%.2f" "$gas_prices")
-  echo "$formatted_price" >> "$output_file"
+
+  # Retry if gas prices are null or zero
+  retries=5
+  while [ -n "$gas_prices" ] && ([ "$gas_prices" = "null" ] || [ "$gas_prices" = "0" ]) && [ $retries -gt 0 ]; do
+    echo "Received null or zero gas prices. Retrying..."
+    sleep 1
+    gas_prices=$(echo "$gas_data" | jq -r '.[].gasPrices.regular | tonumber')
+    retries=$((retries - 1))
+  done
+
+  if [ -n "$gas_prices" ] && [ "$gas_prices" != "0" ]; then
+    formatted_price=$(printf "%.2f" "$gas_prices")
+    echo "$formatted_price" >> "$output_file"
+  else
+    echo "Failed to get a valid gas price after multiple attempts."
+  fi
 fi
